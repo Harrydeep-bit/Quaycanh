@@ -34,7 +34,19 @@ jobs:
           name: QuayCanh-apk
           path: QuayCanh.apk
 
+      - name: Đưa APK lên nhánh apk (link tải cố định)
+        run: |
+          mkdir -p /tmp/apk && cp QuayCanh.apk /tmp/apk/
+          cd /tmp/apk
+          git init -q -b apk
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add QuayCanh.apk
+          git commit -q -m "APK bản ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" apk
+
       - name: Tạo bản phát hành để tải APK
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
