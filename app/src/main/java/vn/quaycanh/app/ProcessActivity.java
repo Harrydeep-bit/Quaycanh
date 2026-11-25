@@ -287,7 +287,9 @@ public class ProcessActivity extends AppCompatActivity {
             ui.post(() -> showPlan(pl));
         } catch (Exception e) {
             AiDirector.Plan pl = AiDirector.offline(kho, music, daDung);
-            pl.moTa = "AI lỗi (" + Http.shorten(e.getMessage(), 180) + ") — tạm chọn ngẫu nhiên.";
+            pl.moTa = "⚠ AI LỖI — đoạn dưới đây chỉ là chọn NGẪU NHIÊN.\nLý do: " + Http.shorten(e.getMessage(), 300)
+                    + "\nAnh vào Cài đặt › Kiểm tra khóa AI, hoặc bấm \"Đổi đoạn khác\" để thử lại.";
+            pl.tamTrang = "";
             ui.post(() -> showPlan(pl));
         }
     }
@@ -296,9 +298,13 @@ public class ProcessActivity extends AppCompatActivity {
         plan = pl;
         spinner.setVisibility(View.GONE);
         status.setText("Xong phần chọn. Anh xem lại rồi bấm Tạo video.");
-        String scene = pl.moTa;
+        boolean failed = pl.moTa.startsWith("⚠") || pl.moTa.startsWith("(Chưa có khóa");
+        sceneText.setTextColor(failed ? 0xFFFF6B6B : Ui.MUTED);
+        if (failed) status.setText("AI không chạy được, xem lý do bên dưới.");
+        String scene = "AI thấy: " + pl.moTa;
+        if (failed) scene = pl.moTa;
         if (!pl.tamTrang.isEmpty()) scene += "\nCảm xúc: " + pl.tamTrang;
-        scene += pl.doanIndex >= 0 ? "\nĐoạn lấy từ kho văn." : "\nKhông có đoạn hợp, AI tự viết.";
+        if (!failed) scene += pl.doanIndex >= 0 ? "\nĐoạn lấy từ kho văn." : "\nKhông có đoạn hợp, AI tự viết.";
         sceneText.setText(scene);
         vanEdit.setText(pl.van);
         nguonEdit.setText("Văn mẫu".equals(pl.nguon) ? "" : pl.nguon);

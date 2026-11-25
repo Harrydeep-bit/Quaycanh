@@ -55,13 +55,17 @@ public final class AiDirector {
           .append("Các ảnh đính kèm là khung hình trích từ đoạn video vừa quay (dài khoảng ")
           .append(Math.round(videoSec)).append(" giây).\n\n")
           .append("VIỆC CỦA BẠN:\n")
-          .append("1. Nhìn kỹ cảnh: đó là gì, ánh sáng, thời điểm trong ngày, không khí, cảm xúc gợi ra.\n")
-          .append("2. Chọn trong KHO VĂN bên dưới đoạn hợp nhất với cảnh và cảm xúc đó. ")
+          .append("1. Nhìn thật kỹ cảnh: ở đâu (ngoài trời hay trong nhà), có những đồ vật / con vật / người gì, ánh sáng ra sao, ")
+          .append("thời điểm trong ngày, không khí, cảm xúc gợi ra. Cảnh bình thường (phòng ngủ, góc bếp, quán nước…) cũng có chất thơ riêng: ")
+          .append("sự tĩnh lặng, ánh đèn vàng, nỗi cô đơn, sự quen thuộc của nhà.\n")
+          .append("2. Chọn trong KHO VĂN bên dưới đoạn THẬT SỰ hợp với cảnh đó. Đoạn văn phải khớp với thứ người xem đang thấy: ")
+          .append("không chọn đoạn nói về biển, núi, bầu trời, cánh đồng… khi cảnh là trong phòng, và ngược lại. ")
           .append("Có thể cắt bớt đoạn đã chọn (giữ nguyên câu chữ gốc, chỉ bỏ bớt câu ở đầu/cuối) cho vừa độ dài.\n");
         if (p.aiWriteOwn()) {
             sb.append("   Nếu KHÔNG có đoạn nào thật sự hợp, hãy TỰ VIẾT một đoạn mới (doan_id = -1) theo giọng văn tiểu thuyết ")
               .append("Việt Nam: giàu hình ảnh, chiêm nghiệm, man mác, câu chữ tự nhiên, không sáo rỗng, không dùng emoji. ")
-              .append("Đoạn tự viết phải là văn của bạn, không chép lại văn của tác giả khác.\n");
+              .append("Đoạn tự viết phải là văn của bạn, không chép lại văn của tác giả khác. ")
+              .append("Hãy nhắc tới vài chi tiết có thật trong cảnh để người xem thấy văn \"ăn\" với hình.\n");
         } else {
             sb.append("   Luôn phải chọn một đoạn trong kho (không tự viết).\n");
         }
@@ -107,9 +111,28 @@ public final class AiDirector {
                         .put("temperature", 0.9));
         Map<String, String> h = new HashMap<>();
         h.put("x-goog-api-key", p.geminiKey());
-        String model = p.geminiModel().isEmpty() ? "gemini-flash-latest" : p.geminiModel();
-        String url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
-        String res = Http.postJson(url, body.toString(), h, 120000);
+        java.util.LinkedHashSet<String> models = new java.util.LinkedHashSet<>();
+        if (!p.geminiModel().isEmpty()) models.add(p.geminiModel());
+        models.add("gemini-flash-latest");
+        models.add("gemini-3.8-flash");
+        models.add("gemini-3.6-flash");
+        models.add("gemini-3.5-flash");
+        models.add("gemini-2.5-flash");
+        String res = null;
+        Exception lastErr = null;
+        for (String model : models) {
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
+            try {
+                res = Http.postJson(url, body.toString(), h, 120000);
+                break;
+            } catch (java.io.IOException e) {
+                lastErr = e;
+                String m = String.valueOf(e.getMessage());
+                // khóa sai / hết lượt thì đổi mô hình cũng vô ích
+                if (m.contains("API_KEY") || m.contains("API key") || m.contains("HTTP 401") || m.contains("HTTP 403")) break;
+            }
+        }
+        if (res == null) throw lastErr != null ? lastErr : new Exception("Gemini không phản hồi");
         JSONObject r = new JSONObject(res);
         JSONArray cands = r.optJSONArray("candidates");
         if (cands == null || cands.length() == 0) throw new Exception("Gemini không trả lời: " + Http.shorten(res, 300));
@@ -145,6 +168,16 @@ public final class AiDirector {
             if ("text".equals(o.optString("type"))) sb.append(o.optString("text"));
         }
         return sb.toString();
+    }
+
+    /** Gọi thử AI một câu ngắn để kiểm tra khóa. Trả về câu trả lời. */
+    public static String test(Prefs p) throws Exception {
+        String prompt = "Trả lời đúng một câu ngắn bằng tiếng Việt: chào anh Quang, khóa AI đã hoạt động. "
+                + "Trả về JSON dạng {\"tra_loi\": \"...\"}";
+        String t = Prefs.AI_CLAUDE.equals(p.aiProvider())
+                ? callClaude(p, prompt, new java.util.ArrayList<>())
+                : callGemini(p, prompt, new java.util.ArrayList<>());
+        return Http.shorten(t, 200);
     }
 
     static Plan parse(String text, List<KhoVan.Doan> kho, List<MusicLib.Track> music) throws Exception {

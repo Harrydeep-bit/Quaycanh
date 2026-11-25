@@ -66,6 +66,21 @@ public class SettingsActivity extends AppCompatActivity {
         claudeKey = field("Khóa Claude (API key, console.anthropic.com)", p.claudeKey(), true);
         claudeModel = field("Mô hình Claude", p.claudeModel(), false);
         note("Chưa nhập khóa thì app vẫn chạy, nhưng sẽ chọn văn và nhạc ngẫu nhiên.");
+        TextView testAi = Ui.button(this, "Kiểm tra khóa AI", 0xFF2C2F38);
+        TextView aiStatus = Ui.label(this, "", 13, Ui.MUTED);
+        testAi.setOnClickListener(v -> {
+            save();
+            aiStatus.setText("Đang gọi thử AI…");
+            new Thread(() -> {
+                String msg;
+                try { msg = "✔ Chạy tốt: " + AiDirector.test(p); }
+                catch (Exception e) { msg = "✘ Lỗi: " + Http.shorten(e.getMessage(), 300); }
+                String m = msg;
+                ui.post(() -> aiStatus.setText(m));
+            }).start();
+        });
+        col.addView(testAi, lp(8));
+        col.addView(aiStatus);
 
         // ---- Giọng
         section("Giọng đọc");
