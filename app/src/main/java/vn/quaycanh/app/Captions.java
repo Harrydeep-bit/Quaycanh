@@ -7,7 +7,10 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 
 import androidx.media3.common.util.UnstableApi;
-import androidx.media3.effect.CanvasOverlay;
+import android.graphics.Bitmap;
+
+import androidx.media3.common.util.Size;
+import androidx.media3.effect.BitmapOverlay;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -95,7 +98,7 @@ public final class Captions {
 
     /** Lớp vẽ phụ đề lên từng khung hình video. */
     @UnstableApi
-    public static final class Overlay extends CanvasOverlay {
+    public static final class Overlay extends BitmapOverlay {
         private final List<Line> lines;
         private final String source;
         private final double sourceFrom, sourceTo;
@@ -106,7 +109,6 @@ public final class Captions {
         private final RectF rect = new RectF();
 
         public Overlay(List<Line> lines, String source, double sourceFrom, double sourceTo) {
-            super(/* useInputFrameAspectRatio= */ true);
             this.lines = lines;
             this.source = source;
             this.sourceFrom = sourceFrom;
@@ -126,8 +128,33 @@ public final class Captions {
             src.setTextAlign(Paint.Align.CENTER);
         }
 
+        // hai bitmap luân phiên để thư viện luôn nạp lại hình mới mỗi khung
+        private final Bitmap[] bufs = new Bitmap[2];
+        private final Canvas[] canvases = new Canvas[2];
+        private int which;
+
         @Override
-        public void onDraw(Canvas canvas, long presentationTimeUs) {
+        public void configure(Size videoSize) {
+            super.configure(videoSize);
+            int w = Math.max(2, videoSize.getWidth()), h = Math.max(2, videoSize.getHeight());
+            if (bufs[0] == null || bufs[0].getWidth() != w || bufs[0].getHeight() != h) {
+                for (int i = 0; i < 2; i++) {
+                    bufs[i] = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                    canvases[i] = new Canvas(bufs[i]);
+                }
+            }
+        }
+
+        @Override
+        public Bitmap getBitmap(long presentationTimeUs) {
+            if (bufs[0] == null) configure(new Size(1080, 1920));
+            which ^= 1;
+            bufs[which].eraseColor(Color.TRANSPARENT);
+            onDraw(canvases[which], presentationTimeUs);
+            return bufs[which];
+        }
+
+        private void onDraw(Canvas canvas, long presentationTimeUs) {
             double t = presentationTimeUs / 1_000_000.0;
             int W = canvas.getWidth(), H = canvas.getHeight();
             float base = Math.min(W, H);
