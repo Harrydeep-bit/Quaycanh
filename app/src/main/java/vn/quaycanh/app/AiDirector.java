@@ -20,6 +20,8 @@ public final class AiDirector {
         public String nguon = "";
         public String musicId = "";
         public String gioiTinh = "nam"; // nam / nu
+        public String cachDoc = "";     // gợi ý cách đọc cho giọng Gemini
+        public String nhacTags = "";    // từ khoá tiếng Anh để tìm nhạc online (Jamendo)
     }
 
     private AiDirector() {}
@@ -72,7 +74,8 @@ public final class AiDirector {
         sb.append("3. Độ dài văn bản cuối cùng: khoảng ").append(wr[0]).append("–").append(wr[1])
           .append(" chữ (âm tiết), 2–4 câu, để đọc chậm vừa khít video.\n")
           .append("4. Chọn 1 bản nhạc trong KHO NHẠC hợp không khí (dựa vào tên/mô tả).\n")
-          .append("5. Chọn giọng đọc nam hay nữ hợp với đoạn văn.\n\n");
+          .append("5. Chọn giọng đọc nam hay nữ hợp với đoạn văn, và mô tả cách đọc (vd: \"trầm buồn, chậm, như đang nhớ về một người\").\n")
+          .append("6. Đưa ra 2–3 từ khoá TIẾNG ANH mô tả nhạc nền hợp cảnh để tìm nhạc online (vd: \"piano calm\", \"ambient sad\", \"acoustic happy\").\n\n");
         if (ghiChu != null && !ghiChu.trim().isEmpty()) {
             sb.append("GHI CHÚ CỦA NGƯỜI DÙNG (ưu tiên làm theo): ").append(ghiChu.trim()).append("\n\n");
         }
@@ -93,7 +96,8 @@ public final class AiDirector {
           .append("\"doan_id\": số id trong kho hoặc -1, ")
           .append("\"van_ban\": \"văn bản cuối cùng sẽ được đọc\", ")
           .append("\"nguon\": \"tên tác phẩm – tác giả của đoạn trong kho, hoặc chuỗi rỗng nếu tự viết\", ")
-          .append("\"nhac_id\": \"id bản nhạc\", \"gioi_tinh\": \"nam\" hoặc \"nu\"}");
+          .append("\"nhac_id\": \"id bản nhạc\", \"nhac_tags\": \"từ khoá tiếng Anh\", ")
+          .append("\"gioi_tinh\": \"nam\" hoặc \"nu\", \"cach_doc\": \"mô tả cách đọc\"}");
         return sb.toString();
     }
 
@@ -191,6 +195,8 @@ public final class AiDirector {
         pl.van = o.optString("van_ban").trim();
         pl.nguon = o.optString("nguon").trim();
         pl.musicId = o.optString("nhac_id");
+        pl.nhacTags = o.optString("nhac_tags");
+        pl.cachDoc = o.optString("cach_doc");
         pl.gioiTinh = o.optString("gioi_tinh", "nam").toLowerCase().startsWith("n\u1eef")
                 || o.optString("gioi_tinh").equalsIgnoreCase("nu") ? "nu" : "nam";
         if (pl.doanIndex >= 0 && pl.doanIndex < kho.size()) {
@@ -203,6 +209,55 @@ public final class AiDirector {
         if (MusicLib.find(music, pl.musicId) == null && !music.isEmpty()) pl.musicId = music.get(0).id;
         if (pl.van.isEmpty()) throw new Exception("AI không đưa ra đoạn văn nào.");
         return pl;
+    }
+
+    /**
+     * Lọc ra các đoạn trích hay từ một văn bản dài (tác phẩm, chương truyện).
+     * Có khóa AI thì AI chọn; không thì lấy các đoạn văn có độ dài vừa phải.
+     */
+    public static List<KhoVan.Doan> extractExcerpts(Prefs p, String text, String nguon) throws Exception {
+        text = text.replace("\r", "");
+        boolean hasKey = Prefs.AI_CLAUDE.equals(p.aiProvider()) ? !p.claudeKey().isEmpty() : !p.geminiKey().isEmpty();
+        List<KhoVan.Doan> out = new java.util.ArrayList<>();
+        if (!hasKey) {
+            for (String para : text.split("\n\\s*\n|\n")) {
+                String t = para.trim().replaceAll("\\s+", " ");
+                if (t.length() >= 120 && t.length() <= 480 && !t.startsWith("[")) {
+                    out.add(new KhoVan.Doan(t, nguon, ""));
+                    if (out.size() >= 25) break;
+                }
+            }
+            return out;
+        }
+        // văn bản quá dài thì lấy 3 khúc rải đều
+        String src = text;
+        int max = 45000;
+        if (src.length() > max) {
+            int part = max / 3;
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 3; i++) {
+                int st = (int) ((src.length() - part) * (i / 2.0));
+                sb.append(src, st, st + part).append("\n\n[…]\n\n");
+            }
+            src = sb.toString();
+        }
+        String prompt = "Dưới đây là văn bản tác phẩm \"" + nguon + "\". Hãy chọn ra tối đa 15 đoạn trích HAY NHẤT "
+                + "để làm lời bình cho video ngắn quay cảnh vật: giàu hình ảnh, tả cảnh, tả tâm trạng, chiêm nghiệm về đời, "
+                + "đọc riêng vẫn hiểu. Mỗi đoạn 2–4 câu LIỀN NHAU, CHÉP NGUYÊN VĂN từ văn bản (không sửa chữ, không thêm bớt), "
+                + "bỏ qua đoạn hội thoại dài. Kèm thẻ: cảnh vật, thời điểm, cảm xúc phù hợp.\n"
+                + "CHỈ trả về JSON: {\"doan\": [{\"van\": \"...\", \"the\": \"chiều, sông, buồn\"}]}\n\nVĂN BẢN:\n" + src;
+        String res = Prefs.AI_CLAUDE.equals(p.aiProvider())
+                ? callClaude(p, prompt, new java.util.ArrayList<>())
+                : callGemini(p, prompt, new java.util.ArrayList<>());
+        int a = res.indexOf('{'), b = res.lastIndexOf('}');
+        if (a < 0 || b <= a) throw new Exception("AI trả lời không đúng dạng");
+        JSONArray arr = new JSONObject(res.substring(a, b + 1)).optJSONArray("doan");
+        if (arr != null) for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.getJSONObject(i);
+            String v = o.optString("van").trim();
+            if (v.length() > 20) out.add(new KhoVan.Doan(v, nguon, o.optString("the")));
+        }
+        return out;
     }
 
     /** Khi chưa nhập khóa AI: chọn ngẫu nhiên trong kho. */

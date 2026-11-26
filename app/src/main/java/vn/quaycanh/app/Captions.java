@@ -37,34 +37,73 @@ public final class Captions {
      * tiếng Việt mỗi chữ là một âm tiết nên thời gian gần đều nhau, thêm khoảng nghỉ ở dấu câu.
      */
     public static List<Line> build(String text, double speechStart, double speechEnd) {
-        String[] raw = text.replace('\n', ' ').trim().split("\\s+");
-        List<Word> words = new ArrayList<>();
-        List<Double> weights = new ArrayList<>();
+        return build(text, speechStart, speechEnd, null);
+    }
+
+    private static boolean isBreak(String w) {
+        char last = w.charAt(w.length() - 1);
+        return last == ',' || last == ';' || last == ':' || last == '.' || last == '!' || last == '?' || last == '…';
+    }
+
+    /** Chia đều thời gian [a,b] cho các chữ (theo trọng số, có nghỉ ở dấu câu). */
+    private static void spread(List<Word> words, double a, double b) {
+        if (words.isEmpty()) return;
         double total = 0;
-        for (String r : raw) {
-            if (r.isEmpty()) continue;
-            Word w = new Word(r);
-            words.add(w);
-            double wt = 1.0;
+        double[] wt = new double[words.size()], pause = new double[words.size()];
+        for (int i = 0; i < words.size(); i++) {
+            String r = words.get(i).text;
+            wt[i] = 1.0;
             char last = r.charAt(r.length() - 1);
-            double pause = 0;
-            if (last == ',' || last == ';' || last == ':') pause = 1.3;
-            else if (last == '.' || last == '!' || last == '?' || last == '…') pause = 2.4;
-            weights.add(wt);
-            weights.add(pause);
-            total += wt + pause;
+            if (i < words.size() - 1) {
+                if (last == ',' || last == ';' || last == ':') pause[i] = 1.3;
+                else if (last == '.' || last == '!' || last == '?' || last == '…') pause[i] = 2.4;
+            }
+            total += wt[i] + pause[i];
         }
-        if (words.isEmpty()) return new ArrayList<>();
-        // khoảng nghỉ sau chữ cuối không tính
-        total -= weights.get(weights.size() - 1);
-        double unit = (speechEnd - speechStart) / Math.max(1e-6, total);
-        double t = speechStart;
+        double unit = (b - a) / Math.max(1e-6, total);
+        double t = a;
         for (int i = 0; i < words.size(); i++) {
             Word w = words.get(i);
             w.start = t;
-            t += weights.get(i * 2) * unit;
+            t += wt[i] * unit;
             w.end = t;
-            if (i < words.size() - 1) t += weights.get(i * 2 + 1) * unit;
+            t += pause[i] * unit;
+        }
+    }
+
+    /**
+     * Ước lượng thời điểm đọc mỗi chữ. Nếu có danh sách khoảng lặng (gaps) đo được từ giọng đọc,
+     * dùng chúng để khớp chỗ ngắt câu cho chính xác.
+     */
+    public static List<Line> build(String text, double speechStart, double speechEnd, List<double[]> gaps) {
+        String[] raw = text.replace('\n', ' ').trim().split("\\s+");
+        List<Word> words = new ArrayList<>();
+        for (String r : raw) if (!r.isEmpty()) words.add(new Word(r));
+        if (words.isEmpty()) return new ArrayList<>();
+
+        // các cụm từ, ngắt ở dấu câu
+        List<List<Word>> phrases = new ArrayList<>();
+        List<Word> cur0 = new ArrayList<>();
+        for (Word w : words) {
+            cur0.add(w);
+            if (isBreak(w.text)) { phrases.add(cur0); cur0 = new ArrayList<>(); }
+        }
+        if (!cur0.isEmpty()) phrases.add(cur0);
+        int need = phrases.size() - 1;
+        if (gaps != null && need > 0 && gaps.size() >= need) {
+            // lấy các khoảng lặng dài nhất làm chỗ ngắt cụm
+            List<double[]> g = new ArrayList<>(gaps);
+            g.sort((x, y) -> Double.compare(y[1] - y[0], x[1] - x[0]));
+            g = new ArrayList<>(g.subList(0, need));
+            g.sort((x, y) -> Double.compare(x[0], y[0]));
+            double a = speechStart;
+            for (int i = 0; i < phrases.size(); i++) {
+                double b = i < need ? g.get(i)[0] : speechEnd;
+                spread(phrases.get(i), a, Math.max(a + 0.2, b));
+                if (i < need) a = g.get(i)[1];
+            }
+        } else {
+            spread(words, speechStart, speechEnd);
         }
 
         // gom thành từng dòng ngắn (tối đa 4 chữ / 22 ký tự), ngắt ở dấu câu

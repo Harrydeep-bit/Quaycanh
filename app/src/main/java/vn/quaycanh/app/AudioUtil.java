@@ -219,6 +219,122 @@ public final class AudioUtil {
         return new double[]{a * win / (double) SR, Math.min(p.seconds(), (b + 1) * win / (double) SR)};
     }
 
+
+    // ---------------------------------------------------------------- làm chậm, kéo dài chỗ ngắt
+
+    private static double[] rmsWindows(Pcm p, int win) {
+        int nWin = p.frames() / win;
+        double[] rms = new double[Math.max(1, nWin)];
+        for (int w = 0; w < nWin; w++) {
+            double s = 0;
+            for (int i = w * win; i < (w + 1) * win; i++) {
+                float v = (p.data[i * 2] + p.data[i * 2 + 1]) * 0.5f;
+                s += v * v;
+            }
+            rms[w] = Math.sqrt(s / win);
+        }
+        return rms;
+    }
+
+    /** Các khoảng lặng (giây) nằm giữa phần có tiếng nói, dài ít nhất minGapSec. */
+    public static java.util.List<double[]> findGaps(Pcm p, double a, double b, double minGapSec) {
+        int win = SR / 50;
+        double[] rms = rmsWindows(p, win);
+        double peak = 0;
+        for (double r : rms) peak = Math.max(peak, r);
+        double th = Math.max(0.004, peak * 0.07);
+        java.util.List<double[]> gaps = new java.util.ArrayList<>();
+        int wa = (int) (a * 50), wb = Math.min(rms.length, (int) (b * 50));
+        int start = -1;
+        for (int w = wa; w < wb; w++) {
+            boolean quiet = rms[w] < th;
+            if (quiet && start < 0) start = w;
+            if ((!quiet || w == wb - 1) && start >= 0) {
+                int end = quiet ? w + 1 : w;
+                if ((end - start) / 50.0 >= minGapSec) gaps.add(new double[]{start / 50.0, end / 50.0});
+                start = -1;
+            }
+        }
+        return gaps;
+    }
+
+    /** Kéo dài các chỗ ngắt nghỉ trong giọng đọc (factor 1.6 = dài thêm 60%). */
+    public static Pcm lengthenPauses(Pcm p, double a, double b, double factor) {
+        if (factor <= 1.01) return p;
+        java.util.List<double[]> gaps = findGaps(p, a, b, 0.12);
+        if (gaps.isEmpty()) return p;
+        FloatList out = new FloatList(p.data.length + SR * 4);
+        int pos = 0;
+        for (double[] g : gaps) {
+            int mid = (int) ((g[0] + g[1]) / 2 * SR);
+            double extra = Math.min(0.7, (g[1] - g[0]) * (factor - 1));
+            for (int i = pos; i < mid; i++) { out.add(p.data[i * 2]); out.add(p.data[i * 2 + 1]); }
+            int n = (int) (extra * SR);
+            for (int i = 0; i < n; i++) { out.add(0f); out.add(0f); }
+            pos = mid;
+        }
+        for (int i = pos; i < p.frames(); i++) { out.add(p.data[i * 2]); out.add(p.data[i * 2 + 1]); }
+        return new Pcm(out.toArray());
+    }
+
+    /**
+     * Đổi tốc độ đọc mà không đổi giọng (thuật toán WSOLA).
+     * speed 0.85 = chậm hơn 15%.
+     */
+    public static Pcm changeSpeed(Pcm p, double speed) {
+        if (Math.abs(speed - 1) < 0.02) return p;
+        int n = p.frames();
+        float[] x = new float[n];
+        for (int i = 0; i < n; i++) x[i] = (p.data[i * 2] + p.data[i * 2 + 1]) * 0.5f;
+        final int N = 1536, H = N / 2, tol = 360;
+        float[] win = new float[N];
+        for (int k = 0; k < N; k++) win[k] = (float) (0.5 - 0.5 * Math.cos(2 * Math.PI * k / (N - 1)));
+        int outLen = (int) (n / speed) + 2 * N;
+        float[] y = new float[outLen];
+        float[] ws = new float[outLen];
+        int outPos = 0, prevIn = -1;
+        double inPos = 0;
+        while (true) {
+            int target = (int) inPos;
+            if (target + N + tol >= n || outPos + N >= outLen) break;
+            int best = target;
+            if (prevIn >= 0 && prevIn + H + H < n) {
+                int natural = prevIn + H;
+                double bestC = -Double.MAX_VALUE;
+                for (int d = -tol; d <= tol; d += 3) {
+                    int c = target + d;
+                    if (c < 0 || c + N >= n) continue;
+                    double s = 0;
+                    for (int k = 0; k < H; k += 4) s += x[natural + k] * x[c + k];
+                    if (s > bestC) { bestC = s; best = c; }
+                }
+            }
+            for (int k = 0; k < N; k++) {
+                y[outPos + k] += x[best + k] * win[k];
+                ws[outPos + k] += win[k];
+            }
+            prevIn = best;
+            outPos += H;
+            inPos += H * speed;
+        }
+        int len = Math.min(outLen, outPos + H);
+        float[] st = new float[len * 2];
+        for (int i = 0; i < len; i++) {
+            float v = ws[i] > 1e-3f ? y[i] / ws[i] : 0f;
+            st[i * 2] = v;
+            st[i * 2 + 1] = v;
+        }
+        return new Pcm(st);
+    }
+
+    /** PCM 16-bit mono (little-endian) → Pcm. */
+    public static Pcm fromPcm16(byte[] b, int rate) {
+        int n = b.length / 2;
+        float[] s = new float[n];
+        for (int i = 0; i < n; i++) s[i] = (short) ((b[i * 2] & 0xff) | (b[i * 2 + 1] << 8)) / 32768f;
+        return toStereo44(s, rate, 1);
+    }
+
     // ---------------------------------------------------------------- trộn
 
     /**

@@ -52,7 +52,10 @@ public class KhoVanActivity extends AppCompatActivity {
         TextView add = Ui.button(this, "+ Thêm đoạn", Ui.RED);
         add.setOnClickListener(v -> editDialog(-1));
         col.addView(add, lp(6));
-        TextView imp = Ui.button(this, "Nhập từ file .txt", 0xFF2C2F38);
+        TextView wiki = Ui.button(this, "Lấy từ Wikisource (văn học Việt, hết bản quyền)", 0xFF3A2A6B);
+        wiki.setOnClickListener(v -> wikiSearchDialog());
+        col.addView(wiki, lp(8));
+        TextView imp = Ui.button(this, "Nhập từ file .txt (cả cuốn truyện cũng được)", 0xFF2C2F38);
         imp.setOnClickListener(v -> {
             Intent i = new Intent(Intent.ACTION_GET_CONTENT);
             i.setType("text/*");
@@ -166,6 +169,140 @@ public class KhoVanActivity extends AppCompatActivity {
         ab.show();
     }
 
+    // ------------------------------------------------------------------ Wikisource
+
+    private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+    private AlertDialog busy;
+
+    private void showBusy(String msg) {
+        if (busy == null) {
+            busy = new AlertDialog.Builder(this).setMessage(msg).setCancelable(false).create();
+            busy.show();
+        } else {
+            busy.setMessage(msg);
+        }
+    }
+
+    private void hideBusy() {
+        if (busy != null) { busy.dismiss(); busy = null; }
+    }
+
+    private void error(String msg) {
+        hideBusy();
+        new AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK", null).show();
+    }
+
+    private void wikiSearchDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int p = Ui.dp(this, 18);
+        box.setPadding(p, Ui.dp(this, 8), p, 0);
+        TextView tip = Ui.label(this, "Gõ tên tác giả hoặc tác phẩm. Gợi ý: Thạch Lam, Nam Cao, Vũ Trọng Phụng, "
+                + "Khái Hưng, Nhất Linh, Hồ Biểu Chánh, Hoàng Ngọc Phách, Tản Đà, Phan Kế Bính…", 13, Ui.MUTED);
+        box.addView(tip);
+        EditText q = input("Tên tác giả / tác phẩm", "", false);
+        box.addView(q);
+        new AlertDialog.Builder(this).setTitle("Tìm trên Wikisource").setView(box)
+                .setPositiveButton("Tìm", (d, w) -> {
+                    String query = q.getText().toString().trim();
+                    if (query.isEmpty()) return;
+                    showBusy("Đang tìm “" + query + "”…");
+                    new Thread(() -> {
+                        try {
+                            List<WikiSource.Hit> hits = WikiSource.search(query);
+                            ui.post(() -> { hideBusy(); pickHit(hits); });
+                        } catch (Exception e) {
+                            ui.post(() -> error("Không tìm được: " + e.getMessage()));
+                        }
+                    }).start();
+                })
+                .setNegativeButton("Huỷ", null).show();
+    }
+
+    private void pickHit(List<WikiSource.Hit> hits) {
+        if (hits.isEmpty()) { error("Không thấy kết quả nào. Anh thử gõ tên khác."); return; }
+        String[] names = new String[hits.size()];
+        for (int i = 0; i < hits.size(); i++) names[i] = hits.get(i).title;
+        new AlertDialog.Builder(this).setTitle("Chọn tác phẩm")
+                .setItems(names, (d, i) -> openWork(hits.get(i).title))
+                .setNegativeButton("Huỷ", null).show();
+    }
+
+    private void openWork(String title) {
+        showBusy("Đang mở “" + title + "”…");
+        new Thread(() -> {
+            try {
+                List<String> subs = WikiSource.subpages(title);
+                if (subs.isEmpty()) {
+                    String text = WikiSource.text(title);
+                    ui.post(() -> { hideBusy(); askSourceThenExtract(text, title); });
+                } else {
+                    ui.post(() -> { hideBusy(); pickChapter(title, subs); });
+                }
+            } catch (Exception e) {
+                ui.post(() -> error("Không mở được: " + e.getMessage()));
+            }
+        }).start();
+    }
+
+    private void pickChapter(String title, List<String> subs) {
+        String[] names = new String[subs.size() + 1];
+        names[0] = "★ Lấy ngẫu nhiên vài chương";
+        for (int i = 0; i < subs.size(); i++) names[i + 1] = subs.get(i).substring(Math.min(subs.get(i).length(), title.length() + 1));
+        new AlertDialog.Builder(this).setTitle(title)
+                .setItems(names, (d, i) -> {
+                    showBusy("Đang tải nội dung…");
+                    new Thread(() -> {
+                        try {
+                            StringBuilder sb = new StringBuilder();
+                            if (i == 0) {
+                                java.util.List<String> pick = new java.util.ArrayList<>(subs);
+                                java.util.Collections.shuffle(pick);
+                                for (int k = 0; k < Math.min(4, pick.size()); k++) sb.append(WikiSource.text(pick.get(k))).append("\n\n");
+                            } else {
+                                sb.append(WikiSource.text(subs.get(i - 1)));
+                            }
+                            String text = sb.toString();
+                            ui.post(() -> { hideBusy(); askSourceThenExtract(text, title); });
+                        } catch (Exception e) {
+                            ui.post(() -> error("Không tải được: " + e.getMessage()));
+                        }
+                    }).start();
+                })
+                .setNegativeButton("Huỷ", null).show();
+    }
+
+    /** Hỏi tên tác phẩm – tác giả rồi cho AI lọc đoạn hay. */
+    private void askSourceThenExtract(String text, String title) {
+        if (text.trim().length() < 200) { error("Trang này gần như không có nội dung, anh chọn trang khác nhé."); return; }
+        EditText src = input("Tác phẩm – Tác giả (vd: Gió lạnh đầu mùa – Thạch Lam)", title, false);
+        LinearLayout box = new LinearLayout(this);
+        box.setPadding(Ui.dp(this, 18), Ui.dp(this, 8), Ui.dp(this, 18), 0);
+        box.addView(src, new LinearLayout.LayoutParams(-1, -2));
+        new AlertDialog.Builder(this).setTitle("Nguồn hiện ở cuối video")
+                .setMessage("Đã lấy " + text.length() + " ký tự. AI sẽ lọc ra các đoạn hay nhất để thêm vào kho.")
+                .setView(box)
+                .setPositiveButton("Lọc đoạn hay", (d, w) -> {
+                    String nguon = src.getText().toString().trim();
+                    showBusy("AI đang đọc tác phẩm và chọn đoạn hay… (có thể mất 1 phút)");
+                    new Thread(() -> {
+                        try {
+                            List<KhoVan.Doan> got = AiDirector.extractExcerpts(new Prefs(this), text, nguon);
+                            ui.post(() -> {
+                                hideBusy();
+                                if (got.isEmpty()) { error("Không lọc được đoạn nào."); return; }
+                                list.addAll(0, got);
+                                saveAndRefresh();
+                                Toast.makeText(this, "Đã thêm " + got.size() + " đoạn từ " + nguon, Toast.LENGTH_LONG).show();
+                            });
+                        } catch (Exception e) {
+                            ui.post(() -> error("AI lọc lỗi: " + e.getMessage()));
+                        }
+                    }).start();
+                })
+                .setNegativeButton("Huỷ", null).show();
+    }
+
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
@@ -174,9 +311,14 @@ public class KhoVanActivity extends AppCompatActivity {
             try (InputStream is = getContentResolver().openInputStream(u)) {
                 String text = new String(Http.readAll(is), StandardCharsets.UTF_8);
                 List<KhoVan.Doan> parsed = KhoVan.parse(text, "");
-                list.addAll(0, parsed);
-                saveAndRefresh();
-                Toast.makeText(this, "Đã nhập " + parsed.size() + " đoạn", Toast.LENGTH_LONG).show();
+                if (text.length() > 4000 || parsed.size() > 40) {
+                    // văn bản dài (cả cuốn truyện): để AI lọc đoạn hay
+                    askSourceThenExtract(text, "");
+                } else {
+                    list.addAll(0, parsed);
+                    saveAndRefresh();
+                    Toast.makeText(this, "Đã nhập " + parsed.size() + " đoạn", Toast.LENGTH_LONG).show();
+                }
             } catch (Exception e) {
                 Toast.makeText(this, "Không đọc được file: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }

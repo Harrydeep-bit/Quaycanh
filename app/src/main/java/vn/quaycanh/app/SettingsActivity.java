@@ -28,13 +28,15 @@ public class SettingsActivity extends AppCompatActivity {
     private static final int REQ_FOLDER = 7;
     private static final List<String> MALE = Arrays.asList("Thiện Minh", "Thiền Tâm Đức", "Hải Đăng", "Adam bựa", "Quang Sơn");
     private static final List<String> FEMALE = Arrays.asList("Ngọc Huyền", "Trúc Ly", "Mai Anh", "Thùy Dung", "Ngọc Trân");
-    private static final String[] ENGINES = {Prefs.TTS_VIENEU, Prefs.TTS_OMNI, Prefs.TTS_ANDROID};
+    private static final String[] ENGINES = {Prefs.TTS_GEMINI, Prefs.TTS_VIENEU, Prefs.TTS_OMNI, Prefs.TTS_ANDROID};
+    private static final List<String> G_MALE = Arrays.asList("Charon", "Algenib", "Orus", "Iapetus", "Enceladus", "Rasalgethi");
+    private static final List<String> G_FEMALE = Arrays.asList("Sulafat", "Vindemiatrix", "Kore", "Achernar", "Gacrux", "Aoede");
     private static final String[] GENDERS = {"auto", "nam", "nu"};
 
     private Prefs p;
     private LinearLayout col;
-    private Spinner aiSpin, engineSpin, maleSpin, femaleSpin, genderSpin;
-    private EditText geminiKey, geminiModel, claudeKey, claudeModel, hfToken, volume;
+    private Spinner aiSpin, engineSpin, maleSpin, femaleSpin, genderSpin, gMaleSpin, gFemaleSpin;
+    private EditText geminiKey, geminiModel, claudeKey, claudeModel, hfToken, volume, speed, pause, jamendo;
     private CheckBox writeOwn, showSource;
     private TextView folderText, testStatus;
     private MediaPlayer mp;
@@ -85,8 +87,19 @@ public class SettingsActivity extends AppCompatActivity {
         // ---- Giọng
         section("Giọng đọc");
         int ei = Arrays.asList(ENGINES).indexOf(p.ttsEngine());
-        engineSpin = spinner(new String[]{"VieNeu-TTS (Hugging Face)", "OmniVoice (Hugging Face)", "Giọng có sẵn của Android"},
-                Math.max(0, ei));
+        engineSpin = spinner(new String[]{"Gemini TTS (có cảm xúc, dùng khóa Gemini)", "VieNeu-TTS (Hugging Face)",
+                        "OmniVoice (Hugging Face)", "Giọng có sẵn của Android"}, Math.max(0, ei));
+        note("Gemini TTS đọc có cảm xúc nhất: AI tự chọn cách đọc (trầm buồn, ấm áp, hào hứng…) theo cảnh. Dùng chung khóa Gemini ở trên.");
+        label("Giọng Gemini nam");
+        gMaleSpin = spinner(new String[]{"Charon (trầm, kể chuyện)", "Algenib (khàn, trầm)", "Orus (chắc, rõ)",
+                "Iapetus (trong)", "Enceladus (thì thầm, nhẹ)", "Rasalgethi (truyền cảm)"}, Math.max(0, G_MALE.indexOf(p.geminiVoiceMale())));
+        label("Giọng Gemini nữ");
+        gFemaleSpin = spinner(new String[]{"Sulafat (ấm áp)", "Vindemiatrix (dịu dàng)", "Kore (chắc, rõ)",
+                "Achernar (mềm mại)", "Gacrux (trưởng thành)", "Aoede (nhẹ nhàng)"}, Math.max(0, G_FEMALE.indexOf(p.geminiVoiceFemale())));
+        speed = field("Tốc độ đọc (%) — 100 là bình thường, nhỏ hơn là chậm hơn (mặc định 85)", String.valueOf(p.speedPercent()), false);
+        speed.setInputType(InputType.TYPE_CLASS_NUMBER);
+        pause = field("Độ dài ngắt nghỉ ở dấu câu (%) — mặc định 170", String.valueOf(p.pausePercent()), false);
+        pause.setInputType(InputType.TYPE_CLASS_NUMBER);
         label("Giọng VieNeu nam");
         maleSpin = spinner(MALE.toArray(new String[0]), Math.max(0, MALE.indexOf(p.vieneuVoiceMale())));
         label("Giọng VieNeu nữ");
@@ -94,7 +107,7 @@ public class SettingsActivity extends AppCompatActivity {
         label("Nam hay nữ");
         genderSpin = spinner(new String[]{"Để AI chọn theo đoạn văn", "Luôn giọng nam", "Luôn giọng nữ"},
                 Math.max(0, Arrays.asList(GENDERS).indexOf(p.voiceGender())));
-        note("VieNeu và OmniVoice chạy miễn phí trên Hugging Face nhưng giới hạn lượt dùng GPU. "
+        note("Nếu chọn VieNeu / OmniVoice: hai giọng này chạy miễn phí trên Hugging Face nhưng giới hạn lượt dùng GPU. "
                 + "Nếu hay báo hết lượt: tạo tài khoản huggingface.co → Settings → Access Tokens → tạo token (Read) → dán vào đây. "
                 + "Khi dịch vụ online lỗi, app tự chuyển sang giọng khác.");
         hfToken = field("Hugging Face token (không bắt buộc)", p.hfToken(), true);
@@ -121,6 +134,9 @@ public class SettingsActivity extends AppCompatActivity {
         TextView clear = Ui.button(this, "Bỏ thư mục nhạc", 0xFF2C2F38);
         clear.setOnClickListener(v -> { p.put("music_folder", ""); updateFolderText(); });
         col.addView(clear, lp(8));
+        note("Nhạc online Jamendo: kho hơn 500.000 bài nhạc miễn phí bản quyền (Creative Commons), AI tự tìm bài hợp cảnh. "
+                + "Lấy mã miễn phí: vào devportal.jamendo.com → đăng ký → My Applications → tạo app → chép Client ID dán vào đây.");
+        jamendo = field("Jamendo Client ID (không bắt buộc)", p.jamendoId(), true);
         volume = field("Độ to nhạc nền (10–80, mặc định 35)", p.musicVolume(), false);
         volume.setInputType(InputType.TYPE_CLASS_NUMBER);
 
@@ -225,6 +241,11 @@ public class SettingsActivity extends AppCompatActivity {
         p.put("vieneu_female", FEMALE.get(femaleSpin.getSelectedItemPosition()));
         p.put("voice_gender", GENDERS[genderSpin.getSelectedItemPosition()]);
         p.put("hf_token", hfToken.getText().toString().trim());
+        p.put("gemini_voice_male", G_MALE.get(gMaleSpin.getSelectedItemPosition()));
+        p.put("gemini_voice_female", G_FEMALE.get(gFemaleSpin.getSelectedItemPosition()));
+        p.put("speed", speed.getText().toString().trim());
+        p.put("pause", pause.getText().toString().trim());
+        p.put("jamendo_id", jamendo.getText().toString().trim());
         p.put("music_volume", volume.getText().toString().trim());
         p.putBool("ai_write_own", writeOwn.isChecked());
         p.putBool("show_source", showSource.isChecked());
@@ -238,9 +259,17 @@ public class SettingsActivity extends AppCompatActivity {
             try {
                 File dir = new File(getCacheDir(), "thu");
                 dir.mkdirs();
-                File f = TtsEngine.speak(this, p,
+                File raw = TtsEngine.speak(this, p,
                         "Gió vẫn thổi qua đồi cỏ như mười năm trước. Chỉ có con người là đi nhanh quá, vội quá.",
-                        gender, dir, msg -> ui.post(() -> testStatus.setText(msg)));
+                        gender, "trầm ấm, man mác hoài niệm", dir, msg -> ui.post(() -> testStatus.setText(msg)));
+                AudioUtil.Pcm v = AudioUtil.decodeFile(raw, 60);
+                double[] bd = AudioUtil.speechBounds(v);
+                v = AudioUtil.lengthenPauses(v, bd[0], bd[1], p.pausePercent() / 100.0);
+                double sp = Math.max(0.5, Math.min(1.5, p.speedPercent() / 100.0));
+                if (raw.getName().contains("gemini")) sp = (sp + 1) / 2;
+                v = AudioUtil.changeSpeed(v, sp);
+                File f = new File(dir, "thu_xong.wav");
+                AudioUtil.writeWav(f, v);
                 ui.post(() -> {
                     try {
                         if (mp != null) mp.release();

@@ -65,6 +65,7 @@ public class ProcessActivity extends AppCompatActivity {
     private File resultFile;
     private Uri galleryUri;
     private volatile String note = "";
+    private volatile String musicCredit = "";
 
     private TextView status;
     private ProgressBar spinner;
@@ -304,6 +305,7 @@ public class ProcessActivity extends AppCompatActivity {
         String scene = "AI thấy: " + pl.moTa;
         if (failed) scene = pl.moTa;
         if (!pl.tamTrang.isEmpty()) scene += "\nCảm xúc: " + pl.tamTrang;
+        if (!pl.cachDoc.isEmpty()) scene += "\nCách đọc: " + pl.cachDoc;
         if (!failed) scene += pl.doanIndex >= 0 ? "\nĐoạn lấy từ kho văn." : "\nKhông có đoạn hợp, AI tự viết.";
         sceneText.setText(scene);
         vanEdit.setText(pl.van);
@@ -334,24 +336,43 @@ public class ProcessActivity extends AppCompatActivity {
             Prefs p = new Prefs(this) {
                 @Override public String voiceGender() { return gender; }
             };
-            File voiceFile = TtsEngine.speak(this, p, text, gender, work, this::log);
-            log("Đang trộn giọng đọc với nhạc nền…");
+            String style = plan != null ? plan.cachDoc : "";
+            File voiceFile = TtsEngine.speak(this, p, text, gender, style, work, this::log);
+            log("Đang chỉnh nhịp đọc…");
             AudioUtil.Pcm voice = AudioUtil.decodeFile(voiceFile, 180);
             double[] bounds = AudioUtil.speechBounds(voice);
+            voice = AudioUtil.lengthenPauses(voice, bounds[0], bounds[1], prefs.pausePercent() / 100.0);
+            double speed = Math.max(0.5, Math.min(1.5, prefs.speedPercent() / 100.0));
+            // Gemini đã được dặn đọc chậm, chỉ làm chậm thêm một nửa mức đã chọn
+            if (voiceFile.getName().contains("gemini")) speed = (speed + 1) / 2;
+            voice = AudioUtil.changeSpeed(voice, speed);
+            bounds = AudioUtil.speechBounds(voice);
             double speech = bounds[1] - bounds[0];
+            List<double[]> gaps = new ArrayList<>();
+            for (double[] g : AudioUtil.findGaps(voice, bounds[0], bounds[1], 0.15))
+                gaps.add(new double[]{g[0] - bounds[0] + LEAD, g[1] - bounds[0] + LEAD});
 
             double narrEnd = LEAD + speech;
             int copies = (int) Math.ceil((narrEnd + 2.0) / videoSec);
             copies = Math.max(1, Math.min(6, copies));
             double total = copies * videoSec;
 
+            log("Đang lấy nhạc nền…");
             AudioUtil.Pcm m = null;
+            musicCredit = "";
             if (track != null) {
                 try {
-                    m = track.asset != null ? AudioUtil.decodeAsset(this, track.asset, total + 5)
-                            : AudioUtil.decodeUri(this, track.uri, total + 5);
+                    if ("jamendo".equals(track.id)) {
+                        log("Đang tìm nhạc trên Jamendo (" + (plan != null ? plan.nhacTags : "") + ")…");
+                        MusicLib.Online on = MusicLib.jamendo(prefs, plan != null ? plan.nhacTags : "", work);
+                        m = AudioUtil.decodeFile(on.file, total + 5);
+                        musicCredit = on.credit;
+                    } else {
+                        m = track.asset != null ? AudioUtil.decodeAsset(this, track.asset, total + 5)
+                                : AudioUtil.decodeUri(this, track.uri, total + 5);
+                    }
                 } catch (Exception e) {
-                    log("Không đọc được bản nhạc, dùng nhạc có sẵn…");
+                    log("Không lấy được bản nhạc (" + Http.shorten(e.getMessage(), 100) + "), dùng nhạc có sẵn…");
                     m = AudioUtil.decodeAsset(this, "nhac/binh_yen.m4a", total + 5);
                 }
             }
@@ -361,7 +382,7 @@ public class ProcessActivity extends AppCompatActivity {
             File wav = new File(work, "tron.wav");
             AudioUtil.writeWav(wav, mix);
 
-            List<Captions.Line> lines = Captions.build(text, LEAD, narrEnd);
+            List<Captions.Line> lines = Captions.build(text, LEAD, narrEnd, gaps);
             String src = prefs.showSource() ? nguon : "";
             double sFrom = narrEnd + 0.3, sTo = Math.min(total - 0.2, narrEnd + 3.8);
 
@@ -414,7 +435,8 @@ public class ProcessActivity extends AppCompatActivity {
         bg.execute(() -> {
             String where = saveToGallery(f);
             ui.post(() -> {
-                status.setText(where);
+                status.setText(musicCredit.isEmpty() ? where : where + "\nNhạc: " + musicCredit
+                        + "\n(Nhạc Jamendo theo giấy phép CC: khi đăng video nên ghi tên bài và tác giả.)");
                 resultCard.setVisibility(View.VISIBLE);
                 player.setVideoPath(f.getAbsolutePath());
                 player.setOnPreparedListener(mp -> mp.setLooping(true));

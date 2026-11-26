@@ -8,6 +8,7 @@ public class Prefs {
     public static final String AI_GEMINI = "gemini";
     public static final String AI_CLAUDE = "claude";
 
+    public static final String TTS_GEMINI = "gemini";
     public static final String TTS_VIENEU = "vieneu";
     public static final String TTS_OMNI = "omni";
     public static final String TTS_ANDROID = "android";
@@ -16,6 +17,10 @@ public class Prefs {
 
     public Prefs(Context c) {
         sp = c.getSharedPreferences("quaycanh", Context.MODE_PRIVATE);
+        if (!sp.getBoolean("v2", false)) {
+            // bản 2: chuyển sang giọng Gemini TTS (có cảm xúc) làm mặc định
+            sp.edit().putString("tts_engine", TTS_GEMINI).putBoolean("v2", true).apply();
+        }
     }
 
     public String get(String k, String def) { return sp.getString(k, def); }
@@ -29,7 +34,15 @@ public class Prefs {
     public String claudeKey() { return get("claude_key", "").trim(); }
     public String claudeModel() { return get("claude_model", "claude-haiku-5-5").trim(); }
 
-    public String ttsEngine() { return get("tts_engine", TTS_VIENEU); }
+    public String ttsEngine() { return get("tts_engine", TTS_GEMINI); }
+    public String geminiVoiceMale() { return get("gemini_voice_male", "Charon"); }
+    public String geminiVoiceFemale() { return get("gemini_voice_female", "Sulafat"); }
+    public String geminiTtsModel() { return get("gemini_tts_model", "gemini-3.1-flash-tts-preview").trim(); }
+    /** Tốc độ đọc, phần trăm (100 = giữ nguyên). */
+    public int speedPercent() { try { return Integer.parseInt(get("speed", "85").trim()); } catch (Exception e) { return 85; } }
+    /** Độ dài chỗ ngắt nghỉ, phần trăm (100 = giữ nguyên). */
+    public int pausePercent() { try { return Integer.parseInt(get("pause", "170").trim()); } catch (Exception e) { return 170; } }
+    public String jamendoId() { return get("jamendo_id", "").trim(); }
     public String hfToken() { return get("hf_token", "").trim(); }
     /** Giọng VieNeu: "auto" = để AI chọn nam/nữ. */
     public String vieneuVoiceMale() { return get("vieneu_male", "Thiện Minh"); }
